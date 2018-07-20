@@ -28,3 +28,7 @@ TopoObs('lwa1',         tempo_code='x', itoa_code='LW',
         itrf_xyz=[-1602196.60, -5042313.47, 3553971.51])
 TopoObs('ps1',          tempo_code='p', itoa_code='PS',
         itrf_xyz=[-5461997.8, -2412559.0, 2243024.0])
+# EarthLocation.from_geodetic( 19.887710,50.090077,231.90)
+TopoObs('Krakow',       tempo_code='k', itoa_code='KR',
+        itrf_xyz=[ 3855793.3607456,  1394842.33276265,  4869401.13689908])
+
