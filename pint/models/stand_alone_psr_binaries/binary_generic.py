@@ -1,8 +1,10 @@
 # This file is a prototype of independent psr binary model class
+from __future__ import absolute_import, print_function, division
 import numpy as np
 import functools
 import collections
 from astropy import log
+import re
 from pint import utils as ut
 import astropy.units as u
 import astropy.constants as c
@@ -12,7 +14,7 @@ except ImportError:
     from astropy._erfa import DAYSEC as SECS_PER_DAY
 SECS_PER_JUL_YEAR = SECS_PER_DAY*365.25
 from pint import ls,GMsun,Tsun,light_second_equivalency
-
+from .binary_orbits import OrbitPB
 
 class PSR_BINARY(object):
     """A base (generic) object for psr binary models. In this class, a set of
@@ -95,16 +97,17 @@ class PSR_BINARY(object):
         self.binary_name = None
         self.param_default_value = {'PB':np.longdouble(10.0)*u.day,
                            'PBDOT':0.0*u.day/u.day,
-                           'ECC': 0.9*u.Unit('') ,
+                           'ECC': 0.0*u.Unit('') ,
                            'EDOT':0.0/u.second ,
                            'A1':10.0*ls,'A1DOT':0.0*ls/u.second,
                            'T0':np.longdouble(54000.0)*u.day,
-                           'OM':10.0*u.deg,
+                           'OM':0.0*u.deg,
                            'OMDOT':0.0*u.deg/u.year,
                            'XPBDOT':0.0*u.day/u.day,
                            'M2':0.0*u.M_sun,
                            'SINI':0*u.Unit(''),
-                           'GAMMA':0*u.second, }
+                           'GAMMA':0*u.second,
+                           'FB0': 1.1574e-6*u.Unit("")/u.second}
         # For Binary phase calculation
         self.param_default_value.update({'P0': 1.0*u.second,
                                          'P1': 0.0*u.second/u.second,
@@ -114,8 +117,10 @@ class PSR_BINARY(object):
                               'A1DOT':['XDOT']}
         self.binary_params = list(self.param_default_value.keys())
         self.inter_vars = ['E','M','nu','ecc','omega','a1','TM2']
+        self.cache_vars = ['E', 'nu']
         self.binary_delay_funcs = []
         self.d_binarydelay_d_par_funcs = []
+        self.orbits_cls = OrbitPB(self, ['PB', 'PBDOT', 'XPBDOT', 'T0'])
 
     @property
     def t(self):
@@ -134,23 +139,35 @@ class PSR_BINARY(object):
         self._T0 = val
         if hasattr(self, '_t'):
             self._tt0 = self.get_tt0(self._t)
+
     @property
     def tt0(self):
         return self._tt0
 
-    def update_input(self, barycentric_toa=None, param_dict=None):
+    def update_input(self, **updates):
         """ A function updates the toas and parameters
         """
         # Update toas
-        if barycentric_toa is not None:
-            if not isinstance(barycentric_toa, np.ndarray) and \
-               not isinstance(barycentric_toa, list):
-                self.t = np.array([barycentric_toa,])
-            else:
-                self.t = barycentric_toa
-        # Update parameters
-        if param_dict is not None:
-            self.set_param_values(param_dict)
+        if 'barycentric_toa' in updates:
+            self.t = np.atleast_1d(updates['barycentric_toa'])
+        # Update observatory position.
+        if 'obs_pos' in updates:
+            self.obs_pos = np.atleast_1d(updates['obs_pos'])
+
+        if 'psr_pos' in updates:
+            self.psr_pos = np.atleast_1d(updates['psr_pos'])
+        # update parameters
+        d_list = ['barycentric_toa', 'obs_pos', 'psr_pos']
+        parameters = {}
+        for key, value in updates.items():
+            if key not in d_list:
+                parameters[key] = value
+        self.set_param_values(parameters)
+
+        # Switch the cache off
+        # NOTE Having cache is needs to be very careful.
+        for cv in self.cache_vars:
+            setattr(self, '_' + cv, None)
 
     def set_param_values(self, valDict = None):
         """A function that sets the parameters and assign values
@@ -163,29 +180,36 @@ class PSR_BINARY(object):
             for par in valDict.keys():
                 if par not in self.binary_params: # search for aliases
                     parname = self.search_alias(par)
-                    if par is None:
+                    if parname is None:
                         raise AttributeError('Can not find parameter '+par+' in '\
-                                              + self.binary_name+'model')
+                                              + self.binary_name+' model')
                 else:
                     parname = par
                 if valDict[par] is None:
                     setattr(self, parname, self.param_default_value[parname])
                     continue
                 if not hasattr(valDict[par], 'unit'):
-                    val = valDict[par] * getattr(self, parname).unit
+                    bm_par = getattr(self, parname)
+                    if not hasattr(bm_par, 'unit'):
+                        val = valDict[par]
+                    else:
+                        val = valDict[par] * getattr(self, parname).unit
                 else:
                     val = valDict[par]
                 setattr(self,parname,val)
 
-    def add_binary_params(self,parameter,defaultValue):
+    def add_binary_params(self,parameter, defaultValue, unit=False):
         """Add one parameter to the binary class
         """
         if parameter not in self.binary_params:
             self.binary_params.append(parameter)
             if not hasattr(defaultValue, 'unit'):
-                log.warning("Binary parameters' value generally has unit."\
+                if unit:
+                    log.warning("Binary parameters' value generally has unit."\
                             " Treat parameter "+parameter+" as a diemension less unit.")
-                self.param_default_value[parameter] = defaultValue*u.Unit("")
+                    self.param_default_value[parameter] = defaultValue*u.Unit("")
+                else:
+                    self.param_default_value[parameter] = defaultValue
             else:
                 self.param_default_value[parameter] = defaultValue
             setattr(self, parameter, self.param_default_value[parameter])
@@ -263,30 +287,28 @@ class PSR_BINARY(object):
         xAttr = getattr(self,x)
         U = [None,None]
         for i,attr in enumerate([yAttr, xAttr]):
-            if type(attr).__name__ == 'Parameter':  # If attr is a PINT Parameter class type
-                U[i] = u.Unit(attr.units)
-            elif type(attr).__name__ == 'MJDParameter': # If attr is a PINT MJDParameter class type
-                U[i] = u.Unit('day')
+            if  hasattr(attr,'units'):  # If attr is a PINT Parameter class type
+                U[i] = attr.units
             elif hasattr(attr,'unit'):  # If attr is a Quantity type
                 U[i] = attr.unit
             elif hasattr(attr,'__call__'):  # If attr is a method
                 U[i] = attr().unit
             else:
                 raise TypeError(type(attr)+'can not get unit')
-            U[i] = 1*U[i]
+            #U[i] = 1*U[i]
 
-            commonU = list(set(U[i].unit.bases).intersection([u.rad,u.deg]))
-            if commonU != []:
-                strU = U[i].unit.to_string()
-                for cu in commonU:
-                    scu = cu.to_string()
-                    strU = strU.replace(scu,'1')
-                U[i] = U[i].to(strU, equivalencies=u.dimensionless_angles())
+            # commonU = list(set(U[i].unit.bases).intersection([u.rad,u.deg]))
+            # if commonU != []:
+            #     strU = U[i].unit.to_string()
+            #     for cu in commonU:
+            #         scu = cu.to_string()
+            #         strU = strU.replace(scu,'1')
+            #     U[i] = U[i].to(strU, equivalencies=u.dimensionless_angles()).unit
 
         yU = U[0]
         xU = U[1]
         # Call derivtive functions
-        derU =  ((yU/xU).decompose()).unit
+        derU =  yU/xU
 
         if hasattr(self,'d_'+y+'_d_'+x):
             dername = 'd_'+y+'_d_'+x
@@ -302,7 +324,7 @@ class PSR_BINARY(object):
         if hasattr(result,'unit'):
             return result.to(derU,equivalencies=u.dimensionless_angles())
         else:
-            return (result*derU).decompose()
+            return (result*derU)
 
     def compute_eccentric_anomaly(self, eccentricity, mean_anomaly):
         """compute eccentric anomaly, solve for Kepler Equation,
@@ -385,59 +407,81 @@ class PSR_BINARY(object):
 
     def d_a1_d_A1DOT(self):
         return self.tt0
+
+    def d_a1_d_par(self, par):
+        if par not in self.binary_params:
+            errorMesg = par + "is not in binary parameter list."
+            raise ValueError(errorMesg)
+
+        par_obj = getattr(self, par)
+        try:
+            func = getattr(self, 'd_a1_d_'+ par)
+        except:
+            func = lambda : np.zeros(len(self.tt0)) * self.A1.unit/par_obj.unit
+        result = func()
+        return result
+
+    ######################################
+    def pb(self):
+        return self.orbits_cls.pbprime()
+
+    def d_pb_d_par(self, par):
+        """derivative for pbprime respect to bianry parameter.
+           Parameters
+           ----------
+           par : string
+                 parameter name
+           Return
+           ----------
+           Derivitve of M respect to par
+        """
+        if par not in self.binary_params:
+            errorMesg = par + " is not in binary parameter list."
+            raise ValueError(errorMesg)
+
+        par_obj = getattr(self, par)
+        result = self.orbits_cls.d_pbprime_d_par(par)
+        return result.to(self.PB.unit/par_obj.unit)
+
+    ######################################
+    def pbdot(self):
+        return self.orbits_cls.pbdot_orbit()
+
     ######################################
     def orbits(self):
-        """Pulsar Orbit
-        """
-        PB = (self.PB).to('second')
-        PBDOT = self.PBDOT
-        XPBDOT = self.XPBDOT
-        orbits = (self.tt0/PB - 0.5*(PBDOT+XPBDOT)*(self.tt0/PB)**2).decompose()
-        return orbits
+        return self.orbits_cls.orbits()
 
     def M(self):
         """Orbit phase
         """
-        orbits = self.orbits()
-        norbits = np.array(np.floor(orbits), dtype=np.long)
-        phase = (orbits - norbits)*2*np.pi*u.rad
+        return self.orbits_cls.orbit_phase()
 
-        return phase
-
-    def d_M_d_T0(self):
-        """dM/dT0  this could be a generic function
+    def d_M_d_par(self, par):
+        """derivative for M respect to bianry parameter.
+           Parameters
+           ----------
+           par : string
+                 parameter name
+           Return
+           ----------
+           Derivitve of M respect to par
         """
-        PB = self.PB.to('second')
-        PBDOT = self.PBDOT
-        XPBDOT = self.XPBDOT
-        return ((PBDOT - XPBDOT)*self.tt0/PB-1.0)*2*np.pi*u.rad/PB
+        if par not in self.binary_params:
+            errorMesg = par + " is not in binary parameter list."
+            raise ValueError(errorMesg)
 
-    def d_M_d_PB(self):
-        """dM/dPB this could be a generic function
-        """
-        PB = self.PB.to('second')
-        PBDOT = self.PBDOT
-        XPBDOT = self.XPBDOT
-        return 2*np.pi*u.rad*((PBDOT+XPBDOT)*self.tt0**2/PB**3 - self.tt0/PB**2)
-
-    def d_M_d_PBDOT(self):
-        """dM/dPBDOT this could be a generic function
-        """
-        PB = self.PB.to('second')
-        return -np.pi*u.rad * self.tt0**2/PB**2
-
-    def d_M_d_XPBDOT(self):
-        """dM/dPBDOT this could be a generic function
-        """
-        PB = self.PB.to('second')
-        return -np.pi*u.rad * self.tt0**2/PB**2
+        par_obj = getattr(self, par)
+        result = self.orbits_cls.d_orbits_d_par(par)
+        return result.to(u.Unit("")/par_obj.unit)
 
     ###############################################
 
     def E(self):
         """Eccentric Anomaly
         """
-        return self.compute_eccentric_anomaly(self.ecc(),self.M())
+        if not hasattr(self, '_E') or self._E is None:
+            self._E = self.compute_eccentric_anomaly(self.ecc(),self.M())
+        return self._E
 
     # Analytically calculate derivtives.
 
@@ -450,23 +494,8 @@ class PSR_BINARY(object):
         E = self.E()
         EDOT = self.EDOT
         ecc = self.ecc()
-        return (RHS-EDOT*np.sin(E))/(1.0-np.cos(E)*ecc)
-
-    def d_E_d_PB(self):
-        """d(E-e*sinE)/dPB = dM/dPB
-           dE/dPB(1-cosE*e)-de/dPB*sinE = dM/dPB
-           dE/dPB(1-cosE*e) = dM/dPB
-        """
-        RHS = self.d_M_d_PB()
-        return RHS/(1.0-np.cos(self.E())*self.ecc())
-
-    def d_E_d_PBDOT(self):
-        RHS = self.d_M_d_PBDOT()
-        return RHS/(1.0-np.cos(self.E())*self.ecc())
-
-    def d_E_d_XPBDOT(self):
-        RHS = self.d_M_d_XPBDOT()
-        return RHS/(1.0-np.cos(self.E())*self.ecc())
+        with u.set_enabled_equivalencies(u.dimensionless_angles()):
+            return (RHS-EDOT*np.sin(E))/(1.0-np.cos(E)*ecc)
 
     def d_E_d_ECC(self):
         E = self.E()
@@ -475,51 +504,85 @@ class PSR_BINARY(object):
     def d_E_d_EDOT(self):
         return self.tt0 * self.d_E_d_ECC()
 
+    def d_E_d_par(self, par):
+        """derivative for E respect to bianry parameter.
+           Parameters
+           ----------
+           par : string
+                 parameter name
+           Return
+           ----------
+           Derivitve of E respect to par
+        """
+        if par not in self.binary_params:
+            errorMesg = par + " is not in binary parameter list."
+            raise ValueError(errorMesg)
+
+        par_obj = getattr(self, par)
+        try:
+            func = getattr(self, 'd_E_d_'+ par)
+        except:
+            if par in self.orbits_cls.orbit_params:
+                d_M_d_par = self.d_M_d_par(par)
+                return d_M_d_par/(1.0-np.cos(self.E())*self.ecc())
+            else:
+                E = self.E()
+                return np.zeros(len(self.tt0)) * E.unit/par_obj.unit
+
     #####################################################
     def nu(self):
         """True anomaly  (Ae)
         """
-        nu = 2*np.arctan(np.sqrt((1.0+self.ecc())/(1.0-self.ecc()))*np.tan(self.E()/2.0))
-        # Normalize True anomaly to on orbit.
-        nu[nu<0] += 2*np.pi*u.rad
-        nu2 = 2*np.pi*self.orbits()*u.rad + nu - self.M()
-        return nu2
+        if not hasattr(self, '_nu') or self._nu is None:
+            ecc = self.ecc()
+            nu = 2*np.arctan(np.sqrt((1.0+ ecc)/(1.0- ecc)) * np.tan(self.E()/2.0))
+            # Normalize True anomaly to on orbit.
+            nu[nu<0] += 2*np.pi*u.rad
+            nu2 = 2*np.pi*self.orbits()*u.rad + nu - self.M()
+            self._nu = nu2
+        return self._nu
 
     def d_nu_d_E(self):
-        brack1 = (1 + self.ecc()*np.cos(self.nu())) / (1 - self.ecc()*np.cos(self.E()))
-        brack2 = np.sin(self.E()) / np.sin(self.nu())
+        nu = self.nu()
+        E = self.E()
+        ecc = self.ecc()
+        brack1 = (1 + ecc * np.cos(nu)) / (1 - ecc * np.cos(E))
+        brack2 = np.sin(E) / np.sin(nu)
         return brack1*brack2
 
     def d_nu_d_ecc(self):
-        return np.sin(self.E())**2/(self.ecc()*np.cos(self.E())-1)**2/np.sin(self.nu())
+        ecc = self.ecc()
+        E = self.E()
+        return np.sin(E)**2/(ecc*np.cos(E)-1)**2/np.sin(self.nu())
 
     def d_nu_d_T0(self):
         """dnu/dT0 = dnu/de*de/dT0+dnu/dE*dE/dT0
            de/dT0 = -EDOT
         """
-        return self.d_nu_d_ecc()*(-self.EDOT)+self.d_nu_d_E()*self.d_E_d_T0()
+        with u.set_enabled_equivalencies(u.dimensionless_angles()):
+            return self.d_nu_d_ecc()*(-self.EDOT)+self.d_nu_d_E()*self.d_E_d_T0()
 
 
-    def d_nu_d_PB(self):
-        """dnu(e,E)/dPB = dnu/de*de/dPB+dnu/dE*dE/dPB
-           de/dPB = 0
-           dnu/dPB = dnu/dE*dE/dPB
-        """
-        return self.d_nu_d_E()*self.d_E_d_PB()
-
-
-    def d_nu_d_PBDOT(self):
-        """dnu(e,E)/dPBDOT = dnu/de*de/dPBDOT+dnu/dE*dE/dPBDOT
-           de/dPBDOT = 0
-           dnu/dPBDOT = dnu/dE*dE/dPBDOT
-        """
-        return self.d_nu_d_E()*self.d_E_d_PBDOT()
-
-
-    def d_nu_d_XPBDOT(self):
-        """dnu/dPBDOT = dnu/dE*dE/dPBDOT
-        """
-        return self.d_nu_d_E()*self.d_E_d_XPBDOT()
+    # def d_nu_d_PB(self):
+    #     """dnu(e,E)/dPB = dnu/de*de/dPB+dnu/dE*dE/dPB
+    #        de/dPB = 0
+    #        dnu/dPB = dnu/dE*dE/dPB
+    #     """
+    #     return self.d_nu_d_E()*self.d_E_d_PB()
+    #
+    #
+    # def d_nu_d_PBDOT(self):
+    #     """dnu(e,E)/dPBDOT = dnu/de*de/dPBDOT+dnu/dE*dE/dPBDOT
+    #        de/dPBDOT = 0
+    #        dnu/dPBDOT = dnu/dE*dE/dPBDOT
+    #     """
+    #     return self.d_nu_d_E()*self.d_E_d_PBDOT()
+    #
+    #
+    # def d_nu_d_XPBDOT(self):
+    #     """dnu/dPBDOT = dnu/dE*dE/dPBDOT
+    #     """
+    #     return self.d_nu_d_E()*self.d_E_d_XPBDOT()
 
 
     def d_nu_d_ECC(self):
@@ -533,13 +596,37 @@ class PSR_BINARY(object):
     def d_nu_d_EDOT(self):
         return self.tt0 * self.d_nu_d_ECC()
 
+    def d_nu_d_par(self, par):
+        """derivative for nu respect to bianry parameter.
+           Parameters
+           ----------
+           par : string
+                 parameter name
+           Return
+           ----------
+           Derivitve of nu respect to par
+        """
+        if par not in self.binary_params:
+            errorMesg = par + " is not in binary parameter list."
+            raise ValueError(errorMesg)
+
+        par_obj = getattr(self, par)
+        try:
+            func = getattr(self, 'd_nu_d_'+ par)
+            return func()
+        except:
+            if par in self.orbits_cls.orbit_params:
+                return self.d_nu_d_E()*self.d_E_d_par(par)
+            else:
+                nu = self.nu()
+                return np.zeros(len(self.tt0)) * nu.unit/par_obj.unit
+
     #############################################
 
     def omega(self):
         """
         """
-        PB = self.PB
-        PB = PB.to('second')
+        PB = self.pb().to('second')
         OMDOT = self.OMDOT
         OM = self.OM
         return OM + OMDOT * self.tt0
@@ -559,13 +646,15 @@ class PSR_BINARY(object):
             errorMesg = par + "is not in binary parameter list."
             raise ValueError(errorMesg)
 
+        par_obj = getattr(self, par)
+
         OMDOT = self.OMDOT
         OM = self.OM
         if par in ['OM','OMDOT','T0']:
             dername = 'd_omega_d_' + par
             return getattr(self,dername)()
         else:
-            return np.longdouble(np.zeros(len(self.tt0)))
+            return np.longdouble(np.zeros(len(self.tt0))) * self.OM.unit/par_obj.unit
 
 
     def d_omega_d_OM(self):
@@ -596,7 +685,7 @@ class PSR_BINARY(object):
     ###########################################################
 
     def pbprime(self):
-        return self.PB - self.PBDOT * self.tt0
+        return self.pb() - self.pbdot() * self.tt0
 
     ################# Calculation for binary phase ################
 
@@ -652,7 +741,7 @@ class PSR_BINARY(object):
     def d_Pobs_d_T0(self):
         geom1 = (-np.sin(self.nu())*np.sin(self.omega())+(np.cos(self.nu())+self.ecc())*np.cos(self.omega()))
         geom2 = (-np.cos(self.nu())*np.sin(self.omega())-np.sin(self.nu())*np.cos(self.omega()))
-        pref1 = -self.P() * self.PBDOT * 2 * np.pi * self.a1() / (self.pbprime()**2 * np.sqrt(1-self.ecc()**2)) * self.SECS_PER_DAY
+        pref1 = -self.P() * self.pbdot() * 2 * np.pi * self.a1() / (self.pbprime()**2 * np.sqrt(1-self.ecc()**2)) * self.SECS_PER_DAY
         pref2 = self.P() * self.Doppler() * self.d_nu_d_T0()
         return pref1 * geom1 + pref2 * geom2
 

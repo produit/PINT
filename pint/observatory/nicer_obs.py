@@ -1,5 +1,5 @@
 # special_locations.py
-from __future__ import division, print_function
+from __future__ import absolute_import, print_function, division
 
 # Special "site" location for NICER experiment
 
@@ -12,7 +12,7 @@ from ..fits_utils import read_fits_event_mjds
 from ..solar_system_ephemerides import objPosVel_wrt_SSB
 import numpy as np
 from astropy.time import Time
-from astropy.table import Table
+from astropy.table import Table, vstack
 import astropy.io.fits as pyfits
 from astropy.extern import six
 from astropy import log
@@ -35,6 +35,9 @@ def load_FPorbit(orbit_filename):
     '''
     # Load photon times from FT1 file
     hdulist = pyfits.open(orbit_filename)
+    #log.info('orb file HDU name is {0}'.format(hdulist[1].name))
+    if hdulist[1].name != 'ORBIT':
+        log.error('NICER orb file first extension is {0}. It should be ORBIT'.format(hdulist[1].name))
     FPorbit_hdr=hdulist[1].header
     FPorbit_dat=hdulist[1].data
 
@@ -61,6 +64,14 @@ def load_FPorbit(orbit_filename):
     FPorbit_table = Table([mjds_TT, X, Y, Z, Vx, Vy, Vz],
             names = ('MJD_TT', 'X', 'Y', 'Z', 'Vx', 'Vy', 'Vz'),
             meta = {'name':'FPorbit'} )
+    # Make sure table is sorted by time
+    log.info('Sorting FPorbit table')
+    FPorbit_table.sort('MJD_TT')
+    # Now delete any bad entries where the positions are 0.0
+    idx = np.where(np.logical_and(FPorbit_table['X'] != 0.0, FPorbit_table['Y'] != 0.0))[0]
+    if (len(idx) != len(FPorbit_table)):
+        log.warning('Dropping {0} zero entries from FPorbit table'.format(len(FPorbit_table)-len(idx)))
+        FPorbit_table = FPorbit_table[idx]
     return FPorbit_table
 
 class NICERObs(SpecialLocation):
@@ -73,7 +84,7 @@ class NICERObs(SpecialLocation):
 
     name: str
         Observatory name
-    ft2name: str
+    FPorbname: str
         File name to read spacecraft position information from
     tt2tdb_mode: str
         Selection for mode to use for TT to TDB conversion.
@@ -82,9 +93,20 @@ class NICERObs(SpecialLocation):
         'spacecraft' = Give spacecraft ITRF position to astropy.Time()
 """
 
-    def __init__(self, name, FPorbname, tt2tdb_mode = 'none'):
+    def __init__(self, name, FPorbname, tt2tdb_mode = 'spacecraft'):
 
-        self.FPorb = load_FPorbit(FPorbname)
+
+        if FPorbname.startswith('@'):
+            # Read multiple orbit files names
+            FPlist = []
+            fnames = [ll.strip() for ll in open(FPorbname[1:]).readlines()]
+            for fn in fnames:
+                FPlist.append(load_FPorbit(fn))
+            self.FPorb = vstack(FPlist)
+            # Make sure full table is sorted
+            self.FPorb.sort('MJD_TT')
+        else:
+            self.FPorb = load_FPorbit(FPorbname)
         # Now build the interpolator here:
         self.X = InterpolatedUnivariateSpline(self.FPorb['MJD_TT'],self.FPorb['X'])
         self.Y = InterpolatedUnivariateSpline(self.FPorb['MJD_TT'],self.FPorb['Y'])
@@ -97,7 +119,7 @@ class NICERObs(SpecialLocation):
         if self.tt2tdb_mode.lower().startswith('none'):
             log.warning('Using location=None for TT to TDB conversion')
         elif self.tt2tdb_mode.lower().startswith('geo'):
-            log.warning('Using location geocenter for TT to TDB conversion')        
+            log.warning('Using location geocenter for TT to TDB conversion')
         super(NICERObs, self).__init__(name=name)
 
     @property
@@ -132,6 +154,20 @@ class NICERObs(SpecialLocation):
     @property
     def tempo_code(self):
         return None
+
+    def get_gcrs(self, t, ephem=None):
+        '''Return position vector of NICER in GCRS
+        t is an astropy.Time or array of astropy.Time objects
+        Returns a 3-vector of Quantities representing the position
+        in GCRS coordinates.
+        '''
+        tmin = np.min(self.FPorb['MJD_TT'])
+        tmax = np.max(self.FPorb['MJD_TT'])
+        if (tmin-np.min(t.tt.mjd) > float(maxextrap)/(60*24) or
+            np.max(t.tt.mjd)-tmax > float(maxextrap)/(60*24)):
+            log.error('Extrapolating NICER position by more than %d minutes!'%maxextrap)
+            raise ValueError("Bad extrapolation of S/C file.")
+        return np.array([self.X(t.tt.mjd), self.Y(t.tt.mjd), self.Z(t.tt.mjd)])*self.FPorb['X'].unit 
 
     def posvel(self, t, ephem, maxextrap=2):
         '''Return position and velocity vectors of NICER.

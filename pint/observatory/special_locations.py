@@ -2,11 +2,12 @@
 
 # Special "site" locations (eg, barycenter) which do not need clock
 # corrections or much else done.
-
+from __future__ import absolute_import, print_function, division
 from . import Observatory
 import numpy
 import astropy.units as u
 from astropy.coordinates import EarthLocation
+from astropy import log
 from ..utils import PosVel
 from ..solar_system_ephemerides import objPosVel_wrt_SSB
 
@@ -16,6 +17,7 @@ class SpecialLocation(Observatory):
     system barycenter).  Currently the only feature of this class is
     that clock corrections are zero."""
     def clock_corrections(self, t):
+        log.info('Special observatory location. No clock corrections applied.')
         return numpy.zeros(t.shape)*u.s
 
 class BarycenterObs(SpecialLocation):
@@ -30,6 +32,11 @@ class BarycenterObs(SpecialLocation):
     @property
     def tempo2_code(self):
         return 'bat'
+    def get_gcrs(self, t, ephem=None):
+        if ephem is None:
+            raise ValueError('Ephemeris needed for BarycenterObs get_gcrs') 
+        ssb_pv = objPosVel_wrt_SSB('earth', t, ephem)
+        return -1 * ssb_pv.pos
     def posvel(self, t, ephem):
         vdim = (3,) + t.shape
         return PosVel(numpy.zeros(vdim)*u.m, numpy.zeros(vdim)*u.m/u.s,
@@ -48,9 +55,12 @@ class GeocenterObs(SpecialLocation):
     @property
     def tempo2_code(self):
         return 'coe'
+    def get_gcrs(self, t, ephem=None):
+        vdim = (3,) + t.shape
+        return np.zeros(vdim) * u.m
     def posvel(self, t, ephem):
         return objPosVel_wrt_SSB('earth', t, ephem)
 
 # Need to initialize one of each so that it gets added to the list
-BarycenterObs('barycenter', aliases=['@','ssb','bary'])
+BarycenterObs('barycenter', aliases=['@','ssb','bary','bat'])
 GeocenterObs('geocenter', aliases=['0','o','coe','geo'])

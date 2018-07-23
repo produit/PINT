@@ -2,20 +2,22 @@
 
 # This file contains the basic definitions of observatory sites for
 # PINT.
-
+from __future__ import absolute_import, print_function, division
 from pint.observatory.topo_obs import TopoObs
 
 TopoObs('gbt',          tempo_code='1', itoa_code='GB',
         itrf_xyz=[882589.65, -4924872.32, 3943729.348])
-TopoObs('arecibo',      tempo_code='3', itoa_code='AO',
+TopoObs('arecibo',      tempo_code='3', itoa_code='AO', aliases=['aoutc'],
         itrf_xyz=[2390490.0, -5564764.0, 1994727.0])
 TopoObs('vla',          tempo_code='6', itoa_code='VL', aliases=['jvla'],
         itrf_xyz=[-1601192.0, -5041981.4, 3554871.4])
 TopoObs('parkes',       tempo_code='7', itoa_code='PK', aliases=['pks'],
         itrf_xyz=[-4554231.5, 2816759.1, -3454036.3])
+TopoObs('jodrell',      tempo_code='8', itoa_code='JB', aliases=['jbdfb', 'jbroach', 'jbafb'],
+        itrf_xyz=[3822626.04, -154105.65, 5086486.04])
 TopoObs('nancay',       tempo_code='f', itoa_code='NC', aliases=['ncy'],
         itrf_xyz=[4324165.81, 165927.11, 4670132.83])
-TopoObs('ncyobs',       tempo_code='f', itoa_code='NC', aliases=['ncyobs'],
+TopoObs('ncyobs', aliases=['ncyobs'],
         itrf_xyz=[4324165.81, 165927.11, 4670132.83], clock_fmt='tempo2',
         clock_file='ncyobs2obspm.clk', clock_dir='TEMPO2')
 TopoObs('effelsberg',   tempo_code='g', itoa_code='EF', aliases=['eff'],
@@ -31,4 +33,5 @@ TopoObs('ps1',          tempo_code='p', itoa_code='PS',
 # EarthLocation.from_geodetic( 19.887710,50.090077,231.90)
 TopoObs('Krakow',       tempo_code='k', itoa_code='KR',
         itrf_xyz=[ 3855793.3607456,  1394842.33276265,  4869401.13689908])
-
+TopoObs('hobart',          tempo_code='4', itoa_code='HO',
+        itrf_xyz=[-3950077.96,  2522377.31,  -4311667.52])

@@ -1,5 +1,6 @@
 # solar_system_shapiro.py
 # Add in Shapiro delays due to solar system objects
+from __future__ import absolute_import, print_function, division
 import numpy
 import astropy.units as u
 import astropy.constants as const
@@ -68,15 +69,16 @@ class SolarSystemShapiro(DelayComponent):
         have been called with the planets=True argument.
         """
         # Start out with 0 delay with units of seconds
-        delay = numpy.zeros(len(toas))
-        for ii, key in enumerate(toas.groups.keys):
-            grp = toas.groups[ii]
-            obs = toas.groups.keys[ii]['obs']
-            loind, hiind = toas.groups.indices[ii:ii+2]
+        tbl = toas.table
+        delay = numpy.zeros(len(tbl))
+        for ii, key in enumerate(tbl.groups.keys):
+            grp = tbl.groups[ii]
+            obs = tbl.groups.keys[ii]['obs']
+            loind, hiind = tbl.groups.indices[ii:ii+2]
             if key['obs'].lower() == 'barycenter':
                 log.info("Skipping Shapiro delay for Barycentric TOAs")
                 continue
-            psr_dir = self.ssb_to_psb_xyz(epoch=grp['tdbld'].astype(numpy.float64))
+            psr_dir = self.ssb_to_psb_xyz_ICRS(epoch=grp['tdbld'].astype(numpy.float64))
             delay[loind:hiind] += self.ss_obj_shapiro_delay(grp['obs_sun_pos'],
                                     psr_dir, self._ss_mass_sec['sun'])
             if self.PLANET_SHAPIRO.value:

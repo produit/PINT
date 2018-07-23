@@ -1,5 +1,6 @@
 # astrometry.py
 # Defines Astrometry timing model class
+from __future__ import absolute_import, print_function, division
 import numpy
 import astropy.coordinates as coords
 import astropy.units as u
@@ -40,8 +41,8 @@ class Astrometry(DelayComponent):
         super(Astrometry, self).setup()
 
 
-    def ssb_to_psb_xyz(self, epoch=None):
-        """Returns unit vector(s) from SSB to pulsar system barycenter.
+    def ssb_to_psb_xyz_ICRS(self, epoch=None):
+        """Returns unit vector(s) from SSB to pulsar system barycenter under ICRS.
 
         If epochs (MJD) are given, proper motion is included in the calculation.
         """
@@ -50,9 +51,10 @@ class Astrometry(DelayComponent):
 
     def barycentric_radio_freq(self, toas):
         """Return radio frequencies (MHz) of the toas corrected for Earth motion"""
-        L_hat = self.ssb_to_psb_xyz(epoch=toas['tdbld'].astype(numpy.float64))
-        v_dot_L_array = numpy.sum(toas['ssb_obs_vel']*L_hat, axis=1)
-        return toas['freq'] * (1.0 - v_dot_L_array / const.c)
+        tbl = toas.table
+        L_hat = self.ssb_to_psb_xyz_ICRS(epoch=tbl['tdbld'].astype(numpy.float64))
+        v_dot_L_array = numpy.sum(tbl['ssb_obs_vel']*L_hat, axis=1)
+        return tbl['freq'] * (1.0 - v_dot_L_array / const.c)
 
     def solar_system_geometric_delay(self, toas, acc_delay=None):
         """Returns geometric delay (in sec) due to position of site in
@@ -61,14 +63,15 @@ class Astrometry(DelayComponent):
         NOTE: currently assumes XYZ location of TOA relative to SSB is
         available as 3-vector toa.xyz, in units of light-seconds.
         """
-        L_hat = self.ssb_to_psb_xyz(epoch=toas['tdbld'].astype(numpy.float64))
-        re_dot_L = numpy.sum(toas['ssb_obs_pos']*L_hat, axis=1)
+        tbl = toas.table
+        L_hat = self.ssb_to_psb_xyz_ICRS(epoch=tbl['tdbld'].astype(numpy.float64))
+        re_dot_L = numpy.sum(tbl['ssb_obs_pos']*L_hat, axis=1)
         delay = -re_dot_L.to(ls).value
         if self.PX.value != 0.0 \
-           and numpy.count_nonzero(toas['ssb_obs_pos']) > 0:
+           and numpy.count_nonzero(tbl['ssb_obs_pos']) > 0:
             L = ((1.0 / self.PX.value) * u.kpc)
             # TODO: numpy.sum currently loses units in some cases...
-            re_sqr = numpy.sum(toas['ssb_obs_pos']**2, axis=1) * toas['ssb_obs_pos'].unit**2
+            re_sqr = numpy.sum(tbl['ssb_obs_pos']**2, axis=1) * tbl['ssb_obs_pos'].unit**2
             delay += (0.5 * (re_sqr / L) * (1.0 - re_dot_L**2 / re_sqr)).to(ls).value
         return delay * u.second
 
@@ -80,13 +83,14 @@ class Astrometry(DelayComponent):
         # TODO: Should delay not have units of u.second?
         delay = self.delay(toas)
 
-        # TODO: toas['tdbld'].quantity should have units of u.day
+        # TODO: tbl['tdbld'].quantity should have units of u.day
         # NOTE: Do we need to include the delay here?
-        rd['epoch'] = toas['tdbld'].quantity * u.day #- delay * u.second
+        tbl = toas.table
+        rd['epoch'] = tbl['tdbld'].quantity * u.day #- delay * u.second
 
         # Distance from SSB to observatory, and from SSB to psr
-        ssb_obs = toas['ssb_obs_pos'].quantity
-        ssb_psr = self.ssb_to_psb_xyz(epoch=numpy.array(rd['epoch']))
+        ssb_obs = tbl['ssb_obs_pos'].quantity
+        ssb_psr = self.ssb_to_psb_xyz_ICRS(epoch=numpy.array(rd['epoch']))
 
         # Cartesian coordinates, and derived quantities
         rd['ssb_obs_r'] = numpy.sqrt(numpy.sum(ssb_obs**2, axis=1))
@@ -101,6 +105,12 @@ class Astrometry(DelayComponent):
         rd['earth_ra'] = numpy.arctan2(rd['ssb_obs_y'], rd['ssb_obs_x'])
 
         return rd
+
+    def get_params_as_ICRS(self):
+        raise NotImplementedError
+
+    def get_psr_coords(self, epoch=None):
+        raise NotImplementedError
 
     def d_delay_astrometry_d_PX(self, toas, param='', acc_delay=None):
         """Calculate the derivative wrt PX
@@ -188,7 +198,7 @@ class AstrometryEquatorial(Astrometry):
                 result += getattr(self, p).as_parfile_line()
         return result
 
-    def coords_as_ICRS(self, epoch=None):
+    def get_psr_coords(self, epoch=None):
         """Returns pulsar sky coordinates as an astropy ICRS object instance.
 
         If epoch (MJD) is specified, proper motion is included to return
@@ -203,6 +213,16 @@ class AstrometryEquatorial(Astrometry):
             dRA = dt * self.PMRA.quantity / numpy.cos(self.DECJ.quantity.radian)
             dDEC = dt * self.PMDEC.quantity
             return coords.ICRS(ra=self.RAJ.quantity+dRA, dec=self.DECJ.quantity+dDEC)
+
+    def coords_as_ICRS(self, epoch=None):
+        return self.get_psr_coords(epoch)
+
+    def get_params_as_ICRS(self):
+        result  = {'RAJ': self.RAJ.quantity,
+                   'DECJ': self.DECJ.quantity,
+                   'PMRA': self.PMRA.quantity,
+                   'PMDEC': self.PMDEC.quantity}
+        return result
 
     def d_delay_astrometry_d_RAJ(self, toas, param='', acc_delay=None):
         """Calculate the derivative wrt RAJ
@@ -337,13 +357,11 @@ class AstrometryEcliptic(Astrometry):
                 else:
                     self.POSEPOCH.quantity = self.PEPOCH.quantity
 
-    def coords_as_ICRS(self, epoch=None):
-        """Returns pulsar sky coordinates as an astropy ICRS object instance.
-        Pulsar coordinates will be transform from ecliptic coordinates to ICRS
+    def get_psr_coords(self, epoch=None):
+        """Returns pulsar sky coordinates as an astropy ecliptic oordinates
+        object. Pulsar coordinates will be computed at current coordinates.
         If epoch (MJD) is specified, proper motion is included to return
         the position at the given epoch.
-
-        If the ecliptic coordinates are provided,
         """
         try:
             PulsarEcliptic.obliquity = OBL[self.ECL.value]
@@ -359,7 +377,12 @@ class AstrometryEcliptic(Astrometry):
             dELAT = dt * self.PMELAT.quantity
 
         pos_ecl = PulsarEcliptic(lon=self.ELONG.quantity+dELONG, lat=self.ELAT.quantity+dELAT)
+        return pos_ecl
 
+    def coords_as_ICRS(self, epoch=None):
+        """This function transform the pulsar ecliptic coordinates to ICRS
+        """
+        pos_ecl = self.get_psr_coords(epoch=epoch)
         return pos_ecl.transform_to(coords.ICRS)
 
     def get_d_delay_quantities_ecliptical(self, toas):
@@ -380,6 +403,20 @@ class AstrometryEcliptic(Astrometry):
         rd['earth_elat'] = coords_elpt.lat
 
         return rd
+
+    def get_params_as_ICRS(self):
+        result = dict()
+        # NOTE This feature below needs astropy version 2.0.
+        dlon_coslat = self.PMELONG.quantity #* numpy.cos(self.ELAT.quantity.radian)
+
+        pv_ECL = PulsarEcliptic(lon=self.ELONG.quantity, lat=self.ELAT.quantity,
+                                d_lon_coslat=dlon_coslat, d_lat=self.PMELAT.quantity)
+        pv_ICRS = pv_ECL.transform_to(coords.ICRS)
+        result['RAJ'] = pv_ICRS.ra.to(u.hourangle)
+        result['DECJ'] = pv_ICRS.dec
+        result['PMRA'] = pv_ICRS.pm_ra_cosdec
+        result['PMDEC'] = pv_ICRS.pm_dec
+        return result
 
     def d_delay_astrometry_d_ELONG(self, toas, param='', acc_delay=None):
         """Calculate the derivative wrt RAJ

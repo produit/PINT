@@ -1,5 +1,5 @@
 #!/usr/bin/env python -W ignore::FutureWarning -W ignore::UserWarning -W ignore::DeprecationWarning
-from __future__ import division, print_function
+from __future__ import absolute_import, print_function, division
 import sys
 import numpy as np
 import pint.toa as toa
@@ -35,10 +35,13 @@ def main(argv=None):
     parser.add_argument("--dm",
         help="DM to use (if not read from par file)",type=float,default=0.0)
     parser.add_argument("--ephem",default="DE421",help="Ephemeris to use")
+    parser.add_argument("--use_gps",default=False,action='store_true',help="Apply GPS to UTC clock corrections")
+    parser.add_argument("--use_bipm",default=False,action='store_true',help="Use TT(BIPM) instead of TT(TAI)")
+
 
     args = parser.parse_args(argv)
 
-    if args.format in ("mjd","jd"):
+    if args.format in ("mjd","jd", "unix"):
         # These formats require conversion from string to longdouble first
         fmt = args.format
         # Never allow format == 'mjd' because it fails when scale is 'utc'
@@ -47,15 +50,15 @@ def main(argv=None):
             fmt = "pulsar_mjd"
         t = Time(np.longdouble(args.time),scale=args.timescale,format=fmt,
             precision=9)
+        print(t)
     else:
         t = Time(args.time,scale=args.timescale,format=args.format, precision=9)
     log.debug(t.iso)
 
     t = toa.TOA(t,freq=args.freq,obs=args.obs)
     # Build TOAs and compute TDBs and positions from ephemeris
-    ts = toa.TOAs(toalist=[t])
-    ts.compute_TDBs()
-    ts.compute_posvels(ephem=args.ephem)
+    ts = toa.get_TOAs_list([t],ephem=args.ephem, include_bipm=args.use_bipm,
+        include_gps=args.use_gps, planets=False)
 
     if args.parfile is not None:
         m=pint.models.get_model(args.parfile)
@@ -67,7 +70,7 @@ def main(argv=None):
         m.DECJ.quantity = Angle(args.dec)
         m.DM.quantity = args.dm*u.parsec/u.cm**3
 
-    tdbtimes = m.get_barycentric_toas(ts.table)
+    tdbtimes = m.get_barycentric_toas(ts)
 
-    print("{0:.14f}".format(tdbtimes[0].value))
+    print("{0:.16f}".format(tdbtimes[0].value))
     return

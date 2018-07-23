@@ -1,12 +1,14 @@
 """Miscellaneous potentially-helpful functions."""
+from __future__ import absolute_import, print_function, division
 import numpy as np
 from scipy.misc import factorial
 import string
 import astropy.time
 try:
-    from astropy.erfa import DJM0
+    from astropy.erfa import DJM0, d2dtf
 except ImportError:
-    from astropy._erfa import DJM0
+    from astropy._erfa import DJM0, d2dtf
+from astropy.time.utils import day_frac
 import astropy.units as u
 from astropy import log
 from .str2ld import str2ldarr1
@@ -154,17 +156,25 @@ def time_to_mjd_string(t, prec=15):
 
     astropy does not seem to provide this capability (yet?).
     """
-    jd1 = t.jd1 - DJM0
-    imjd = int(jd1)
-    fjd1 = jd1 - imjd
-    fmjd = t.jd2 + fjd1
-    assert np.fabs(fmjd) < 2.0
-    if fmjd >= 1.0:
-        imjd += 1
-        fmjd -= 1.0
-    if fmjd < 0.0:
-        imjd -= 1
-        fmjd += 1.0
+    if t.format == 'pulsar_mjd':
+        (imjd, fmjd) = day_frac(t.jd1 - DJM0, t.jd2)
+        imjd = int(imjd)
+        if fmjd<0.0: 
+            imjd -= 1
+        y, mo, d, hmsf = d2dtf('UTC',9,t.jd1,t.jd2)
+        fmjd = (hmsf[...,0]/24.0 + hmsf[...,1]/1440.0 
+                + hmsf[...,2]/86400.0 + hmsf[...,3]/86400.0e9)
+    else:
+        (imjd, fmjd) = day_frac(t.jd1 - DJM0, t.jd2)
+        imjd = int(imjd)
+        assert np.fabs(fmjd) < 2.0
+        if fmjd >= 1.0:
+            imjd += 1
+            fmjd -= 1.0
+        if fmjd < 0.0:
+            imjd -= 1
+            fmjd += 1.0
+
     fmt = "%." + "%sf" % prec
     return str(imjd) + (fmt % fmjd)[1:]
 
@@ -390,11 +400,12 @@ def taylor_horner(x, coeffs):
     return result
 
 
-def taylor_horner_deriv(x, coeffs):
-    """Evaluate a Taylor series of coefficients at x via the Horner scheme.
-    For example, if we want: 3/1! + 4*x/2! + 12*x^2/3! with
-    x evaluated at 2.0, we would do:
-    In [1]: taylor_horner_deriv(2.0, [10, 3, 4, 12])
+def taylor_horner_deriv(x, coeffs, deriv_order=1):
+    """Evaluate the nth derivative of a Taylor series of coefficients at x via
+    the Horner scheme.
+    For example, if we want: first order of (10 + 3*x/1! + 4*x^2/2! + 12*x^3/3!)
+    with respect to x evaluated at 2.0, we would do:
+    In [1]: taylor_horner_deriv(2.0, [10, 3, 4, 12], 1)
     Out[1]: 15.0
     """
     result = 0.0
@@ -402,13 +413,11 @@ def taylor_horner_deriv(x, coeffs):
         if not hasattr(x, 'unit'):
             x = x * u.Unit("")
         result *= coeffs[-1].unit / x.unit
-    fact = float(len(coeffs))
-    der_coeff = float(len(coeffs)) - 1
-    for coeff in coeffs[::-1]:
-        result = result * x / fact + coeff * der_coeff
+    der_coeffs = coeffs[deriv_order::]
+    fact = float(len(der_coeffs))
+    for coeff in der_coeffs[::-1]:
+        result = result * x / fact + coeff
         fact -= 1.0
-        der_coeff -= 1.0
-    result = (result)/x
     return result
 
 def is_number(s):

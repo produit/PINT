@@ -1,8 +1,12 @@
 # This is a wapper for independent binary model. It is a PINT timing model class
+from __future__ import absolute_import, print_function, division
 import astropy.units as u
+import numpy as np
 from . import parameter as p
 from .timing_model import DelayComponent, MissingParameter
+from astropy import log
 from pint import ls,GMsun,Tsun
+from .stand_alone_psr_binaries import binary_orbits as bo
 
 
 class PulsarBinary(DelayComponent):
@@ -69,10 +73,17 @@ class PulsarBinary(DelayComponent):
              units=u.M_sun,
              description="Mass of companian in the unit Sun mass"))
 
-        self.add_param(p.floatParameter(name="SINI", value=0.0,
-             units="",
+        self.add_param(p.floatParameter(name="SINI", units="",
              description="Sine of inclination angle"))
 
+        self.add_param(p.prefixParameter(name="FB0", value=None, units='1/s^1',
+                       description="0th time derivative of frequency of orbit",
+                       unit_template=self.FBX_unit, aliases = ['FB'],
+                       description_template=self.FBX_description,
+                       type_match='float', long_double=True))
+
+        self.interal_params = []
+        self.warn_default_params = ['ECC', 'OM']
         # Set up delay function
         self.delay_funcs_component += [self.binarymodel_delay,]
 
@@ -82,6 +93,33 @@ class PulsarBinary(DelayComponent):
             self.register_deriv_funcs(self.d_binary_delay_d_xxxx, bpar)
         # Setup the model isinstance
         self.binary_instance = self.binary_model_class()
+        # Setup the FBX orbits if FB is set.
+        FBX_mapping = self.get_prefix_mapping_component('FB')
+        FBXs = {}
+        for fbn in FBX_mapping.values():
+            FBXs[fbn] = getattr(self, fbn).quantity
+        if None not in list(FBXs.values()):
+            for fb_name, fb_value in FBXs.items():
+                if fb_value is None:
+                    raise MissingParameter(self.binary_model_name, fb_name + \
+                                           " is required for FB orbits.")
+                self.binary_instance.add_binary_params(fb_name, fb_value)
+            self.binary_instance.orbits_cls = bo.OrbitFBX(self.binary_instance)
+
+    def check_required_params(self, required_params):
+        # seach for all the possible to get the parameters.
+        for p in required_params:
+            par = getattr(self, p)
+            if par.value is None:
+                # try to search if there is any class method that computes it
+                method_name = p.lower() + "_func"
+                try:
+                    par_method = getattr(self.binary_instance, method_name)
+                    _ = par_method()
+                except:
+                    raise MissingParameter(self.binary_model_name, p + \
+                                           " is required for '%s'." %
+                                           self.binary_model_name)
 
     # With new parameter class set up, do we need this?
     def apply_units(self):
@@ -100,26 +138,44 @@ class PulsarBinary(DelayComponent):
         # Don't need to fill P0 and P1. Translate all the others to the format
         # that is used in bmodel.py
         # Get barycnetric toa first
+        updates = {}
+        tbl = toas.table
         if acc_delay is None:
             # If the accumulate delay is not provided, it will try to get
             # the barycentric correction.
             acc_delay = self.delay(toas, self.__class__.__name__, False)
-        self.barycentric_time = toas['tdbld'] * u.day - acc_delay 
-        pardict = {}
+        self.barycentric_time = tbl['tdbld'] * u.day - acc_delay
+        updates['barycentric_toa'] = self.barycentric_time
+        updates['obs_pos'] = tbl['ssb_obs_pos'].quantity
+        updates['psr_pos'] = self.ssb_to_psb_xyz_ICRS(epoch=tbl['tdbld'].astype(np.float64))
         for par in self.binary_instance.binary_params:
             binary_par_names = [par,]
             if par in self.binary_instance.param_aliases.keys():
                 aliase = self.binary_instance.param_aliases[par]
             else:
                 aliase = []
+
             if hasattr(self, par) or \
                 list(set(aliase).intersection(self.params))!=[]:
-                binObjpar = getattr(self, par)
+                pint_bin_name = self.match_param_aliases(par)
+                if pint_bin_name == "" and par in self.interal_params:
+                    pint_bin_name = par
+                binObjpar = getattr(self, pint_bin_name)
+                instance_par = getattr(self.binary_instance, par)
+                if hasattr(instance_par, 'value'):
+                    instance_par_val = instance_par.value
+                else:
+                    instance_par_val = instance_par
                 if binObjpar.value is None:
+                    if binObjpar.name in self.warn_default_params:
+                        log.warn("'%s' is not set, using the default value %f "
+                                 "instead." % (binObjpar.name, instance_par_val))
                     continue
-                pardict[par] = binObjpar.value * binObjpar.units
-        #NOTE something is wrong here.
-        self.binary_instance.update_input(self.barycentric_time, pardict)
+                if binObjpar.units is not None:
+                    updates[par] = binObjpar.value * binObjpar.units
+                else:
+                    updates[par] = binObjpar.value
+        self.binary_instance.update_input(**updates)
 
     def binarymodel_delay(self, toas, acc_delay=None):
         """Return the binary model independent delay call"""
@@ -138,3 +194,9 @@ class PulsarBinary(DelayComponent):
             if par.quantity is not None:
                 result += par.as_parfile_line()
         return result
+
+    def FBX_unit(self, n):
+        return "1/s^%d" % (n+1) if n else "1/s"
+
+    def FBX_description(self, n):
+        return "%dth time derivative of frequency of orbit" % n

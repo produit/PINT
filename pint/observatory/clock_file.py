@@ -1,7 +1,7 @@
 # clock_file.py
 
 # Routines for reading various formats of clock file.
-
+from __future__ import absolute_import, print_function, division
 import os
 import numpy
 import astropy.units as u
@@ -121,7 +121,11 @@ class TempoClockFile(ClockFile):
         # We are swithing off astropy warning only for gps correction.
         with warnings.catch_warnings():
             warnings.simplefilter('ignore', ErfaWarning)
-            self._time = Time(mjd, format='pulsar_mjd', scale='utc')
+            try:
+                self._time = Time(mjd, format='pulsar_mjd', scale='utc')
+            except ValueError:
+                log.error('Filename {0}, site {1}: Bad MJD {2}'.format(filename,obscode,mjd))
+                raise
         self._clock = clk * u.us
 
     @staticmethod

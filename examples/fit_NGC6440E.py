@@ -7,8 +7,7 @@ import pint.residuals
 import pint.models.model_builder as mb
 import matplotlib.pyplot as plt
 import astropy.units as u
-import os, sys
-import numpy as np
+import os
 
 datadir = os.path.dirname(os.path.abspath(str(__file__)))
 parfile = os.path.join(datadir, 'NGC6440E.par')
@@ -48,7 +47,7 @@ plt.show()
 # Now do the fit
 print("Fitting...")
 f = pint.fitter.WlsFitter(t, m)
-f.fit_toas()
+print(f.fit_toas())
 
 # Print some basic params
 print("Best fit has reduced chi^2 of", f.resids.chi2_reduced)
@@ -57,7 +56,7 @@ print("RMS in time is", f.resids.time_resids.std().to(u.us))
 print("\n Best model is:")
 print(f.model.as_parfile())
 
-plt.errorbar(xt,
+plt.errorbar(xt.value,
              f.resids.time_resids.to(u.us).value,
              t.get_errors().to(u.us).value, fmt='x')
 plt.title("%s Post-Fit Timing Residuals" % m.PSR.value)

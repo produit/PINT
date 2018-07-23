@@ -1,3 +1,4 @@
+from __future__ import absolute_import, print_function, division
 from pint import ls,GMsun,Tsun
 from .stand_alone_psr_binaries.DD_model import DDmodel
 from .pulsar_binary import PulsarBinary
@@ -49,10 +50,7 @@ class BinaryDD(PulsarBinary):
         """Check out parameters setup.
         """
         super(BinaryDD,self).setup()
-        for p in ("PB", "T0", "A1"):
-            if getattr(self, p).value is None:
-                raise MissingParameter("DD", p,
-                                       "%s is required for DD" % p)
+        self.check_required_params(["T0", "A1"])
         # If any *DOT is set, we need T0
         for p in ("PBDOT", "OMDOT", "EDOT", "A1DOT"):
             if getattr(self, p).value is None:

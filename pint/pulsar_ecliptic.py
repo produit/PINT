@@ -1,4 +1,4 @@
-from __future__ import print_function
+from __future__ import absolute_import, print_function, division
 import numpy as np
 from astropy.coordinates import frame_transform_graph, DynamicMatrixTransform
 from astropy.coordinates.matrix_utilities import rotation_matrix
@@ -44,6 +44,8 @@ class PulsarEcliptic(coord.BaseCoordinateFrame):
         The Distance for this object along the line-of-sight.
     """
     default_representation = coord.SphericalRepresentation
+    # NOTE: The feature below needs astropy verison 2.0. Disable it right now
+    default_differential = coord.SphericalCosLatDifferential
     obliquity = OBL['DEFAULT']
     # def __init__(self, obliquity=OBL['DEFAULT'], *argu, **kwargs)
     #     super(PulsarEcliptic, self).__init__(*argu, **kwargs):

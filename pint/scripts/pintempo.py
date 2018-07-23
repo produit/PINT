@@ -8,8 +8,7 @@ specify '-f parfile' to those codes -- I mean, who runs TEMPO without a timing m
 This is currently just a stub and should be added to and expanded, as desired.
 
 """
-from __future__ import division, print_function
-
+from __future__ import absolute_import, print_function, division
 import os,sys
 import numpy as np
 import pint.toa as toa
@@ -65,7 +64,7 @@ def main(argv=None):
             plt.show()
 
     if args.outfile is not None:
-        fout = file(args.outfile,"w")
+        fout = open(args.outfile,"w")
     else:
         fout = sys.stdout
         print("\nBest fit model is:")

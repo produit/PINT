@@ -1,5 +1,5 @@
 #!/usr/bin/env python -W ignore::FutureWarning -W ignore::UserWarning -W ignore::DeprecationWarning
-from __future__ import print_function
+from __future__ import absolute_import, print_function, division
 import numpy as np
 import pint.toa as toa
 import pint.models
@@ -8,6 +8,7 @@ import pint.fermi_toas as fermi
 import pint.plot_utils as plot_utils
 from pint.eventstats import hmw, hm
 from pint.models.priors import Prior, UniformUnboundedRV, UniformBoundedRV, GaussianBoundedRV
+from pint.observatory.fermi_obs import FermiObs
 from scipy.stats import norm, uniform
 import matplotlib.pyplot as plt
 import astropy.table
@@ -345,6 +346,7 @@ def main(argv=None):
     parser.add_argument("eventfile",help="event file to use")
     parser.add_argument("parfile",help="par file to read model from")
     parser.add_argument("gaussianfile",help="gaussian file that defines template")
+    parser.add_argument("--ft2",help="Path to FT2 file.",default=None)
     parser.add_argument("--weightcol",help="name of weight column (or 'CALC' to have them computed",default=None)
     parser.add_argument("--nwalkers",help="Number of MCMC walkers (def 200)",type=int,
         default=200)
@@ -381,6 +383,10 @@ def main(argv=None):
     parfile = args.parfile
     gaussianfile = args.gaussianfile
     weightcol = args.weightcol
+
+    if args.ft2 is not None:
+        # Instantiate FermiObs once so it gets added to the observatory registry
+        FermiObs(name='Fermi',ft2name=args.ft2)
 
     nwalkers = args.nwalkers
     burnin = args.burnin
@@ -608,11 +614,14 @@ def main(argv=None):
 
     # Make the triangle plot.
     samples = sampler.chain[:, burnin:, :].reshape((-1, ndim))
-    import corner
-    fig = corner.corner(samples, labels=ftr.fitkeys, bins=50,
-        truths=ftr.maxpost_fitvals, plot_contours=True)
-    fig.savefig(ftr.model.PSR.value+"_triangle.png")
-    plt.close()
+    try:
+        import corner
+        fig = corner.corner(samples, labels=ftr.fitkeys, bins=50,
+            truths=ftr.maxpost_fitvals, plot_contours=True)
+        fig.savefig(ftr.model.PSR.value+"_triangle.png")
+        plt.close()
+    except ImportError:
+        pass
 
     # Make a phaseogram with the 50th percentile values
     #ftr.set_params(dict(zip(ftr.fitkeys, np.percentile(samples, 50, axis=0))))

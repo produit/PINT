@@ -6,13 +6,12 @@ $Header: /nfs/slac/g/glast/ground/cvs/pointlike/python/uw/pulsar/lctemplate.py,v
 author: M. Kerr <matthew.kerr@gmail.com>
 
 """
-
-from __future__ import print_function
+from __future__ import absolute_import, print_function, division
 
 import numpy as np
 from copy import deepcopy
-from lcnorm import NormAngles
-from lcprimitives import *
+from .lcnorm import NormAngles
+from .lcprimitives import *
 from astropy import log
 
 class LCTemplate(object):
@@ -502,7 +501,7 @@ class LCTemplate(object):
             bin_values = 1./(6*nbin)*(hi+4*mid+lo)
 
         bin_values *= 1./bin_values.mean()
-        file(fname,'w').write(''.join(('%.6f %.6f\n'%(x,y) for x,y in zip(bin_phases,bin_values))))
+        open(fname,'w').write(''.join(('%.6f %.6f\n'%(x,y) for x,y in zip(bin_phases,bin_values))))
 
 
 class LCBridgeTemplate(LCTemplate):
@@ -707,7 +706,7 @@ def prim_io(template):
                 norms.append(float(tok[2]))
         return primitives,norms
 
-    toks = [line.strip().split() for line in file(template) if len(line.strip()) > 0]
+    toks = [line.strip().split() for line in open(template) if len(line.strip()) > 0]
     if 'gauss' in toks[0]:     return read_gaussian(toks[1:])
     elif 'kernel' in toks[0]:  return [LCKernelDensity(input_file=toks[1:])],None
     elif 'fourier' in toks[0]: return [LCEmpiricalFourier(input_file=toks[1:])],None

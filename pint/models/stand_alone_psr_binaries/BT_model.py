@@ -1,3 +1,4 @@
+from __future__ import absolute_import, print_function, division
 from .binary_generic import PSR_BINARY
 import numpy as np
 import astropy.units as u
@@ -80,8 +81,8 @@ class BTmodel(PSR_BINARY):
         self.binary_name = 'BT'
         self.binary_params = list(self.param_default_value.keys())
         self.set_param_values() # Set parameters to default values.
-        self.binary_delay_funcs += [self.BTdelay]
-        self.d_binarydelay_d_par_funcs += [self.d_BTdelay_d_par]
+        self.binary_delay_funcs = [self.BTdelay]
+        self.d_binarydelay_d_par_funcs = [self.d_BTdelay_d_par]
         if t is not None:
             self.t = t
         if input_params is not None:
@@ -122,14 +123,17 @@ class BTmodel(PSR_BINARY):
         and delayL2
         """
         a1 = self.a1()/c.c
-        num = a1*np.cos(self.omega())*np.sqrt(1-self.ecc()**2)*np.cos(self.E()) -\
-              a1*np.sin(self.omega())*np.sin(self.E())
-        den = 1.0 - self.ecc()*np.cos(self.E())
+        omega = self.omega()
+        ecc = self.ecc()
+        E = self.E()
+        num = a1 * np.cos(omega)* np.sqrt(1 - ecc**2)*np.cos(E) -\
+              a1 * np.sin(omega) * np.sin(E)
+        den = 1.0 - ecc * np.cos(E)
 
         # In BTmodel.C, they do not use pbprime here, just pb...
         # Is it not more appropriate to include the effects of PBDOT?
         #return 1.0 - 2*np.pi*num / (den * self.pbprime())
-        return 1.0 - 2*np.pi*num / (den * self.PB.to(u.second))
+        return 1.0 - 2*np.pi*num / (den * self.pb().to(u.second))
 
     def BTdelay(self):
         """Full BT model delay"""
@@ -202,54 +206,36 @@ class BTmodel(PSR_BINARY):
     def d_delayL2_d_T0(self):
         return self.d_delayL2_d_E() * self.d_E_d_T0()
 
-    def d_delayL1_d_PB(self):
-        return self.d_delayL1_d_E() * self.d_E_d_PB()
+    def d_delayL1_d_par(self, par):
+        if par not in self.binary_params:
+            errorMesg = par + " is not in binary parameter list."
+            raise ValueError(errorMesg)
 
-    def d_delayL2_d_PB(self):
-        return self.d_delayL2_d_E() * self.d_E_d_PB()
+        par_obj = getattr(self, par)
+        if hasattr(self, 'd_delayL1_d_'+ par):
+            func = getattr(self, 'd_delayL1_d_'+ par)
+            return func()
+        else:
+            if par in self.orbits_cls.orbit_params:
+                return self.d_delayL1_d_E() * self.d_E_d_par(par)
+            else:
+                return np.zeros(len(self.t)) * u.second/par_obj.unit
 
-    def d_delayL1_d_PBDOT(self):
-        return self.d_delayL1_d_E() * self.d_E_d_PBDOT()
+    def d_delayL2_d_par(self, par):
+        if par not in self.binary_params:
+            errorMesg = par + " is not in binary parameter list."
+            raise ValueError(errorMesg)
 
-    def d_delayL2_d_PBDOT(self):
-        return self.d_delayL2_d_E() * self.d_E_d_PBDOT()
-
-    def d_delay_d_A1(self):
-        return self.delayR() * (self.d_delayL1_d_A1() + self.d_delayL2_d_A1())
-
-    def d_delay_d_A1DOT(self):
-        return self.delayR() * (self.d_delayL1_d_A1DOT() + \
-                self.d_delayL2_d_A1DOT())
-
-    def d_delay_d_OM(self):
-        return self.delayR() * (self.d_delayL1_d_OM() + self.d_delayL2_d_OM())
-
-    def d_delay_d_OMDOT(self):
-        return self.delayR() * (self.d_delayL1_d_OMDOT() + \
-                self.d_delayL2_d_OMDOT())
-
-    def d_delay_d_ECC(self):
-        return self.delayR() * (self.d_delayL1_d_ECC() + self.d_delayL2_d_ECC())
-
-    def d_delay_d_EDOT(self):
-        return self.delayR() * (self.d_delayL1_d_EDOT() + \
-                self.d_delayL2_d_EDOT())
-
-    def d_delay_d_PB(self):
-        return self.delayR() * (self.d_delayL1_d_PB() + self.d_delayL2_d_PB())
-
-    def d_delay_d_PBDOT(self):
-        return self.delayR() * (self.d_delayL1_d_PBDOT() + \
-                self.d_delayL2_d_PBDOT())
-
-    def d_delay_d_T0(self):
-        return self.delayR() * (self.d_delayL1_d_T0() + self.d_delayL2_d_T0())
-
-    def d_delay_d_GAMMA(self):
-        return self.delayR() * (self.d_delayL1_d_GAMMA() + self.d_delayL2_d_GAMMA())
+        par_obj = getattr(self, par)
+        if hasattr(self, 'd_delayL2_d_'+ par):
+            func = getattr(self, 'd_delayL2_d_'+ par)
+            return func()
+        else:
+            if par in self.orbits_cls.orbit_params:
+                return self.d_delayL2_d_E() * self.d_E_d_par(par)
+            else:
+                return np.zeros(len(self.t)) * u.second/par_obj.unit
 
     def d_BTdelay_d_par(self, par):
-        if hasattr(self, 'd_delay_d_'+par):
-            return getattr(self, 'd_delay_d_'+par)()
-        else:
-            return np.zeros(len(self.tt0))*u.second/getattr(self, par).unit
+        return self.delayR() * (self.d_delayL1_d_par(par) + \
+                         self.d_delayL2_d_par(par))

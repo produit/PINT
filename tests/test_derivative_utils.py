@@ -7,8 +7,10 @@ def num_diff_phase(toas, pint_param, model, h=None):
         return model.d_phase_d_param_num(toas, pint_param, h)
     if isinstance(par, pa.MJDParameter) or par.units == u.day:
         h = 1e-8
-    elif pint_param in ['SINI']:
+    elif pint_param in ['SINI', 'KIN']:
         h = 1e-3
+    elif pint_param in ['KIN']:
+        h = 1
     elif pint_param in ['F1', 'M2', 'PMELONG', 'PMELAT']:
         h = 2
     else:
@@ -53,6 +55,10 @@ def get_derivative_params(model):
             h = 1e-8
         elif p in ['SINI']:
             h = 3e-4
+        elif p in ['KIN']:
+            h = 2.55e-2
+        elif p in ['KOM']:
+            h = 2e-1
         elif p in ['PX']:
             h = 2e-1
         elif p in ['FD2']:
@@ -63,6 +69,12 @@ def get_derivative_params(model):
             h = 3e-2
         elif p in ['PBDOT']:
             h = 200
+        elif p in ['FB1']:
+            h = 2
+        elif p in ['FB0']:
+            h = 1e-7
+        elif p in ['FB2', 'FB3']:
+            h = 1000
         else:
             h = 1e-2
         test_params[p] = h
